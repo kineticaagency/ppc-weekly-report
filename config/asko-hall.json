@@ -1,0 +1,45 @@
+{
+  "project": "asko-hall.ru",
+  "conversion_note": "Обращения объединяют целевые визиты Метрики из Яндекс.Директа и уникальные звонки Roistat.",
+  "timezone": "Europe/Moscow",
+  "google_sheets": {
+    "spreadsheet_id": "1J_ji923Pb67QAm-exn0QA6RkpEs19CZ9aacgMhDMH3E",
+    "tab_name": "asko-hall.ru"
+  },
+  "yandex_direct": {
+    "client_login": "asko-hall-direct",
+    "include_vat": true,
+    "campaign_ids": []
+  },
+  "yandex_metrika": {
+    "counter_id": 69158290,
+    "attribution": "cross_device_last_significant",
+    "goal_ids": [3069158290, 251176128],
+    "traffic_source": "Переходы по рекламе",
+    "source_engines": ["Яндекс: Директ", "Яндекс.Директ: Не определено"]
+  },
+  "roistat": {
+    "project_id": 187383,
+    "metric": "uniqueCalls",
+    "source_marker": "direct1"
+  },
+  "plan": {
+    "csv_url": "https://docs.google.com/spreadsheets/d/1rohNSitIe2Pp_lPP-Xm6giPyU-W9ZHZjSoTj9JL1njw/export?format=csv&gid=1032895085",
+    "calendar_pacing": true,
+    "rows": {
+      "spend": "Контекст. Контекстная реклама в Яндекс.Директ.\nБюджет, руб. (с НДС)\nПЛАН",
+      "clicks": "Яндекс.Директ      \nСеансов. ПЛАН",
+      "leads": "Яндекс.Директ   \nЦель: Продажи.  ПЛАН\n  KPI: Конверсия. Отправка сообщения в чат\nЗаказ оформлен\nОтправка заявки\nЗвонок Roistat [при конв. 0,07%]",
+      "cpc": "Яндекс.Директ  \nЦена за переход. ПЛАН",
+      "cpa": "Яндекс.Директ \nЦель: Продажи.  ПЛАН\n  KPI: Цена конверсии"
+    }
+  },
+  "plan_kpi_directions": {
+    "spend": "deviation_is_bad",
+    "clicks": "ignore",
+    "leads": "higher_is_better",
+    "cpc": "ignore",
+    "cr": "higher_is_better",
+    "cpa": "lower_is_better"
+  }
+}

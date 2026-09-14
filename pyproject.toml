@@ -1,0 +1,12 @@
+[project]
+name = "weekly-ads-monitor"
+version = "0.1.0"
+description = "Read-only weekly advertising monitoring for project-specific Google Sheets tabs"
+requires-python = ">=3.11"
+dependencies = ["cryptography>=41"]
+
+[project.scripts]
+weekly-ads-monitor = "weekly_ads_monitor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

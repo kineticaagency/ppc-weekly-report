@@ -1,0 +1,70 @@
+{
+  "project": "reduktor40.ru",
+  "timezone": "Europe/Moscow",
+  "week_start": "monday",
+  "google_sheets": {
+    "spreadsheet_id": "1J_ji923Pb67QAm-exn0QA6RkpEs19CZ9aacgMhDMH3E",
+    "tab_name": "reduktor40.ru"
+  },
+  "yandex_direct": {
+    "client_login": "porg-tkoufgm4",
+    "include_vat": true,
+    "campaign_ids": [
+      706498124,
+      706652948,
+      706719002,
+      707218392,
+      708047309,
+      708048417,
+      710005485,
+      711668582
+    ]
+  },
+  "roistat": {
+    "project_id": 284716,
+    "source_marker": "direct17",
+    "attribution_model": "default",
+    "target_status_titles": [
+      "Ожидание ответа клиента (Лиды)",
+      "Перевести в сделку (Лиды)",
+      "Качественный лид (Лиды)",
+      "В работе (Лиды)",
+      "Дорого (Лиды)",
+      "Входящие заявки (Общее) (Сделки)",
+      "Заказать у поставщиков (Общее) (Сделки)",
+      "Отгрузка товаров клиенту (Общее) (Сделки)",
+      "Счет отправлен клиенту (Общее) (Сделки)"
+    ],
+    "non_target_status_titles": [
+      "СПАМ (Лиды)",
+      "Некачественный лид (Лиды)",
+      "Поставщики, реклама, сотрудничество (Лиды)",
+      "Сотрудничество (Лиды)",
+      "Нет товара (Лиды)"
+    ],
+    "unprocessed_status_titles": ["Не обработан (Лиды)"]
+  },
+  "plan": {
+    "csv_url": "https://docs.google.com/spreadsheets/d/1e5tdla_WsrImsdCDgn_aujj7ByqO3cYaiku4qTu3Css/export?format=csv&gid=1032895085",
+    "calendar_pacing": true,
+    "rows": {
+      "spend": "Контекст. Контекстная реклама в Яндекс.Директ.\nБюджет, руб. (с НДС)\nПЛАН",
+      "clicks": "Яндекс.Директ      \nСеансов. ПЛАН",
+      "leads": "Яндекс.Директ  \nЦель: Продажи.  ПЛАН\n  KPI: Конверсия. Сумма заявок [при конв. 1,50%]",
+      "cpc": "Яндекс.Директ  \nЦена за переход. ПЛАН",
+      "cr": "Коэф. конверсии Контекстной рекламы Яндекс.Директ. ПЛАН",
+      "cpa": "CPA Контекстной рекламы Яндекс.Директ. ПЛАН"
+    }
+  },
+  "plan_kpi_directions": {
+    "spend": "deviation_is_bad",
+    "clicks": "ignore",
+    "leads": "higher_is_better",
+    "cpc": "ignore",
+    "cr": "higher_is_better",
+    "cpa": "lower_is_better"
+  },
+  "quality": {
+    "preliminary_unprocessed_share": 0.2
+  }
+}

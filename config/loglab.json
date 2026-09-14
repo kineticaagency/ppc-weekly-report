@@ -1,0 +1,33 @@
+{
+  "project": "loglab.ru",
+  "conversion_note": "Обращения — уникальные целевые визиты Метрики из Яндекс.Директа.",
+  "timezone": "Europe/Moscow",
+  "google_sheets": {
+    "spreadsheet_id": "1J_ji923Pb67QAm-exn0QA6RkpEs19CZ9aacgMhDMH3E",
+    "tab_name": "loglab.ru"
+  },
+  "yandex_direct": {
+    "client_login": "porg-zsyy7hra",
+    "include_vat": true,
+    "campaign_ids": []
+  },
+  "yandex_metrika": {
+    "counter_id": 78913450,
+    "attribution": "cross_device_last_significant",
+    "goal_ids": [496158533, 496158420, 517594584],
+    "traffic_source": "Переходы по рекламе",
+    "source_engines": ["Яндекс: Директ", "Яндекс.Директ: Не определено"]
+  },
+  "plan": {
+    "csv_url": "https://docs.google.com/spreadsheets/d/1LHllsMtheRzGpv8zcmEf6Bc9ipo_IQ_kQKQy3jcXcjU/export?format=csv&gid=1032895085",
+    "calendar_pacing": true
+  },
+  "plan_kpi_directions": {
+    "spend": "deviation_is_bad",
+    "clicks": "ignore",
+    "leads": "higher_is_better",
+    "cpc": "ignore",
+    "cr": "higher_is_better",
+    "cpa": "lower_is_better"
+  }
+}
