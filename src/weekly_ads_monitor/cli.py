@@ -7,7 +7,9 @@ from pathlib import Path
 
 from .env import load_env
 from .diagnostics import analyze
+from .changes import fetch_project_changes
 from .markdown_report import write_markdown
+from .google_sheets import GoogleSheetsClient
 from .periods import calendar_progress, completed_weeks, month_to_date
 from .plans import fetch_month_plan
 from .report import compare, merge_metrics, serialize_period
@@ -26,6 +28,7 @@ def main() -> None:
     parser.add_argument("--as-of", type=date.fromisoformat, default=date.today())
     parser.add_argument("--output", default="output/reduktor40-report.json")
     parser.add_argument("--markdown", default="output/reduktor40-report.md")
+    parser.add_argument("--google-credentials", default=".secrets/google-service-account.json")
     args = parser.parse_args()
 
     config = _load_config(Path(args.config))
@@ -69,6 +72,13 @@ def main() -> None:
         "network:context": "РСЯ",
         **{f"campaign:{key}": value for key, value in campaign_names.items()},
     }
+    changes_cfg = config.get("changes_source")
+    operational_changes = []
+    if changes_cfg:
+        operational_changes = fetch_project_changes(
+            GoogleSheetsClient(Path(args.google_credentials)), changes_cfg["spreadsheet_id"],
+            config["project"], latest, changes_cfg.get("lookback_days", 3),
+        )
     payload = {
         "project": config["project"],
         "as_of": args.as_of.isoformat(),
@@ -78,6 +88,7 @@ def main() -> None:
         "diagnostics": analyze(
             datasets[latest.label]["account"], datasets[previous.label]["account"], threshold,
             datasets[latest.label], datasets[previous.label], labels, campaign_networks,
+            operational_changes,
         ),
         "month_to_date": serialize_period(mtd, datasets[mtd.label], threshold),
         "month_plan": plan,

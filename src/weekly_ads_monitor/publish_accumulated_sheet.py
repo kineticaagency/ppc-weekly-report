@@ -3,12 +3,14 @@ from __future__ import annotations
 import argparse
 import calendar
 import json
+import re
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .google_sheets import GoogleSheetsClient
+from .diagnostics import analyze
 from .models import Metrics
 from .publish_google_sheet import BLUE, GREEN, LIGHT_BLUE, RED, WHITE, YELLOW, display_period
 
@@ -54,7 +56,7 @@ def repeat(sheet_id: int, r1: int, r2: int, c1: int, c2: int, fmt: dict, fields:
 def merged(sheet_id: int, row: int, height: int = 1) -> dict:
     return {"mergeCells": {"range": {"sheetId": sheet_id, "startRowIndex": row,
                                        "endRowIndex": row + height, "startColumnIndex": 0,
-                                       "endColumnIndex": 12}, "mergeType": "MERGE_ALL"}}
+                                       "endColumnIndex": 13}, "mergeType": "MERGE_ALL"}}
 
 
 def row_height(sheet_id: int, start: int, end: int, pixels: int) -> dict:
@@ -93,11 +95,16 @@ def main() -> None:
     if args.calendar_splits:
         split_periods = json.loads(Path(args.calendar_splits).read_text(encoding="utf-8"))["periods"]
     weeks: dict[str, dict] = {}
+    saved_comments: dict[str, str] = {}
     exact_facts: dict[tuple[int, int], dict] = {}
     for item in [*archive, payload]:
         for name in ("previous_week", "latest_week"):
             week = item[name]
             weeks.setdefault(week["period"], week)  # first saved closed-week snapshot wins
+        latest_period = item["latest_week"]["period"]
+        comment = item.get("diagnostics", {}).get("human_comment")
+        if comment:
+            saved_comments.setdefault(latest_period, comment)
         mtd = item.get("month_to_date")
         if mtd:
             start, end = (datetime.fromisoformat(value) for value in mtd["period"].split(".."))
@@ -105,6 +112,18 @@ def main() -> None:
                 exact_facts[(end.year, end.month)] = mtd["rows"]["account"]
 
     ordered_weeks = sorted(weeks.values(), key=lambda item: item["period"])
+    threshold = config.get("quality", {}).get("preliminary_unprocessed_share", .2)
+    for index, week in enumerate(ordered_weeks):
+        if week["period"] in saved_comments:
+            continue
+        if index == 0:
+            saved_comments[week["period"]] = (
+                "Для корректного сравнения недостаточно сохранённых данных предыдущей недели."
+            )
+            continue
+        current = metric(week["rows"]["account"])
+        previous = metric(ordered_weeks[index - 1]["rows"]["account"])
+        saved_comments[week["period"]] = analyze(current, previous, threshold)["human_comment"]
     split_by_period = {item["period"]: item for item in split_periods}
     display_periods = []
     for week in ordered_weeks:
@@ -126,40 +145,55 @@ def main() -> None:
     metadata = client.metadata(args.spreadsheet_id)
     props = next(x["properties"] for x in metadata["sheets"] if x["properties"]["title"] == args.tab)
     sheet_id, grid = props["sheetId"], props["gridProperties"]
-    if grid["columnCount"] < 12:
+    if grid["columnCount"] < 13:
         client.batch_update(args.spreadsheet_id, [{"appendDimension": {
-            "sheetId": sheet_id, "dimension": "COLUMNS", "length": 12 - grid["columnCount"]}}])
-        grid["columnCount"] = 12
+            "sheetId": sheet_id, "dimension": "COLUMNS", "length": 13 - grid["columnCount"]}}])
+        grid["columnCount"] = 13
+
+    existing_comments: dict[str, str] = {}
+    for row in client.values_get(args.spreadsheet_id, f"'{args.tab}'!A1:M{grid['rowCount']}"):
+        if len(row) >= 13 and re.fullmatch(r"\d{2}\.\d{2}\.\d{2}–\d{2}\.\d{2}\.\d{2}", str(row[0])):
+            if str(row[12]).strip():
+                existing_comments[str(row[0])] = str(row[12]).strip()
 
     headers = ["Период", "Расход", "Показы", "CTR", "Клики", "CPC", "CR", "Заявки", "CPA",
-               "Целевые", "CPA целевой", "% целевых"]
+               "Целевые", "CPA целевой", "% целевых", "Комментарий"]
     updated_at = datetime.now(ZoneInfo(config.get("timezone", "Europe/Moscow")))
     rows = [[f"{payload['project']} — еженедельный мониторинг"],
             [f"Последнее обновление: {updated_at:%d.%m.%Y, %H:%M}"], []]
     sections = []
+
+    def source_week(period_label: str) -> str:
+        start_raw, end_raw = period_label.split("..")
+        for week in ordered_weeks:
+            week_start, week_end = week["period"].split("..")
+            if week_start <= start_raw and end_raw <= week_end:
+                return week["period"]
+        return period_label
+
     for year_month in sorted(grouped):
         year, month = year_month
         title_row = len(rows)
         rows.extend([[f"{MONTHS[month]} {year}"], headers])
+        week_rows = []
         for week in grouped[year_month]:
             values = week["rows"].get("account")
             if values is None:
                 zero = Metrics()
                 values = {**zero.__dict__, **zero.derived()}
             row_index = len(rows)
-            rows.append(week_row(week["period"], values))
+            visible_period = display_period(week["period"])
+            comment = existing_comments.get(visible_period) or saved_comments.get(source_week(week["period"]), "")
+            rows.append(week_row(week["period"], values) + [comment])
+            week_rows.append(row_index)
         fact_values = exact_facts.get(year_month)
         if fact_values is None:
             total = combine(*(metric(week["rows"]["account"]) for week in grouped[year_month]))
             fact_values = {**total.__dict__, **total.derived()}
         fact_row = len(rows)
-        rows.extend([["Факт"] + week_row(grouped[year_month][-1]["period"], fact_values)[1:], []])
-        sections.append((title_row, title_row + 1, fact_row))
+        rows.extend([["Факт"] + week_row(grouped[year_month][-1]["period"], fact_values)[1:] + [""], []])
+        sections.append((title_row, title_row + 1, fact_row, week_rows))
 
-    latest = payload["latest_week"]
-    comment_header = len(rows)
-    rows.extend([[f"Комментарий за {display_period(latest['period'])}"],
-                 [payload["diagnostics"]["human_comment"]], [], [], []])
     as_of = datetime.fromisoformat(payload["as_of"])
     plan_header = len(rows)
     rows.extend([[f"План/факт {MONTHS_GENITIVE[as_of.month]} на {as_of:%d.%m.%Y}"],
@@ -180,25 +214,25 @@ def main() -> None:
         grid["rowCount"] = row_count
 
     padded = rows + [[] for _ in range(grid["rowCount"] - row_count)]
-    update_rows = [{"values": [value_cell(v) for v in row + [None] * (12 - len(row))]} for row in padded]
+    update_rows = [{"values": [value_cell(v) for v in row + [None] * (13 - len(row))]} for row in padded]
     requests = [
         {"unmergeCells": {"range": {"sheetId": sheet_id, "startRowIndex": 0,
                                       "endRowIndex": grid["rowCount"], "startColumnIndex": 0,
-                                      "endColumnIndex": 12}}},
+                                      "endColumnIndex": 13}}},
         {"updateCells": {"range": {"sheetId": sheet_id, "startRowIndex": 0,
                                      "endRowIndex": grid["rowCount"], "startColumnIndex": 0,
-                                     "endColumnIndex": 12}, "rows": update_rows, "fields": "userEnteredValue"}},
-        repeat(sheet_id, 0, grid["rowCount"], 0, 12, {}, "userEnteredFormat"),
+                                     "endColumnIndex": 13}, "rows": update_rows, "fields": "userEnteredValue"}},
+        repeat(sheet_id, 0, grid["rowCount"], 0, 13, {}, "userEnteredFormat"),
         merged(sheet_id, 0), merged(sheet_id, 1),
-        repeat(sheet_id, 0, row_count, 0, 12,
+        repeat(sheet_id, 0, row_count, 0, 13,
                {"textFormat": {"fontFamily": "Montserrat", "fontSize": 10},
                 "verticalAlignment": "MIDDLE"},
                "userEnteredFormat.textFormat,userEnteredFormat.verticalAlignment"),
-        repeat(sheet_id, 0, 1, 0, 12,
+        repeat(sheet_id, 0, 1, 0, 13,
                {"backgroundColor": BLUE, "horizontalAlignment": "CENTER",
                 "textFormat": {"bold": True, "foregroundColor": WHITE,
                                "fontFamily": "Montserrat", "fontSize": 14}}, "userEnteredFormat"),
-        repeat(sheet_id, 1, 2, 0, 12,
+        repeat(sheet_id, 1, 2, 0, 13,
                {"horizontalAlignment": "LEFT", "verticalAlignment": "MIDDLE",
                 "textFormat": {"foregroundColor": {"red": .25, "green": .25, "blue": .25},
                                "fontFamily": "Montserrat", "fontSize": 9}}, "userEnteredFormat"),
@@ -208,40 +242,38 @@ def main() -> None:
     ]
     formats = {1: '#,##0 "₽"', 2: "#,##0", 3: "0.0%", 4: "#,##0", 5: '#,##0 "₽"',
                6: "0.0%", 7: "#,##0", 8: '#,##0 "₽"', 9: "#,##0", 10: '#,##0 "₽"', 11: "0.0%"}
-    for title_row, header_row, fact_row in sections:
+    for title_row, header_row, fact_row, week_rows in sections:
         requests.extend([
             merged(sheet_id, title_row),
-            repeat(sheet_id, title_row, title_row + 1, 0, 12,
+            repeat(sheet_id, title_row, title_row + 1, 0, 13,
                    {"backgroundColor": BLUE, "horizontalAlignment": "CENTER",
                     "textFormat": {"bold": True, "foregroundColor": WHITE,
                                    "fontFamily": "Montserrat"}}, "userEnteredFormat"),
-            repeat(sheet_id, header_row, header_row + 1, 0, 12,
+            repeat(sheet_id, header_row, header_row + 1, 0, 13,
                    {"backgroundColor": LIGHT_BLUE, "horizontalAlignment": "CENTER", "wrapStrategy": "WRAP",
                     "textFormat": {"bold": True, "fontFamily": "Montserrat"}}, "userEnteredFormat"),
-            repeat(sheet_id, fact_row, fact_row + 1, 0, 12,
+            repeat(sheet_id, fact_row, fact_row + 1, 0, 13,
                    {"backgroundColor": LIGHT_BLUE,
                     "textFormat": {"bold": True, "fontFamily": "Montserrat"}},
                    "userEnteredFormat.backgroundColor,userEnteredFormat.textFormat"),
             repeat(sheet_id, header_row + 1, fact_row + 1, 1, 12,
                    {"horizontalAlignment": "CENTER"}, "userEnteredFormat.horizontalAlignment"),
             row_height(sheet_id, title_row, header_row + 1, 32),
-            row_height(sheet_id, header_row + 1, fact_row + 1, 26),
+            row_height(sheet_id, fact_row, fact_row + 1, 26),
+            repeat(sheet_id, header_row + 1, fact_row, 12, 13,
+                   {"horizontalAlignment": "LEFT", "verticalAlignment": "MIDDLE",
+                    "wrapStrategy": "WRAP", "textFormat": {"fontFamily": "Montserrat", "fontSize": 9}},
+                   "userEnteredFormat"),
         ])
+        for week_row_index in week_rows:
+            requests.append(row_height(sheet_id, week_row_index, week_row_index + 1, 88))
         for col, pattern in formats.items():
             requests.append(repeat(sheet_id, header_row + 1, fact_row + 1, col, col + 1,
                                    {"numberFormat": {"type": "NUMBER", "pattern": pattern}},
                                    "userEnteredFormat.numberFormat"))
     requests.extend([
-        merged(sheet_id, comment_header), merged(sheet_id, comment_header + 1, 4),
-        repeat(sheet_id, comment_header, comment_header + 1, 0, 12,
-               {"backgroundColor": BLUE, "horizontalAlignment": "CENTER",
-                "textFormat": {"bold": True, "foregroundColor": WHITE, "fontFamily": "Montserrat"}},
-               "userEnteredFormat"),
-        repeat(sheet_id, comment_header + 1, comment_header + 5, 0, 12,
-               {"backgroundColor": YELLOW, "wrapStrategy": "WRAP", "verticalAlignment": "MIDDLE",
-                "textFormat": {"fontFamily": "Montserrat"}}, "userEnteredFormat"),
         merged(sheet_id, plan_header),
-        repeat(sheet_id, plan_header, plan_header + 1, 0, 12,
+        repeat(sheet_id, plan_header, plan_header + 1, 0, 13,
                {"backgroundColor": BLUE, "horizontalAlignment": "CENTER",
                 "textFormat": {"bold": True, "foregroundColor": WHITE, "fontFamily": "Montserrat"}},
                "userEnteredFormat"),
@@ -273,13 +305,14 @@ def main() -> None:
         {"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "COLUMNS",
                                                    "startIndex": 1, "endIndex": 12},
                                        "properties": {"pixelSize": 105}, "fields": "pixelSize"}},
+        {"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "COLUMNS",
+                                                   "startIndex": 12, "endIndex": 13},
+                                       "properties": {"pixelSize": 460}, "fields": "pixelSize"}},
         row_height(sheet_id, 0, 1, 38), row_height(sheet_id, 1, 2, 26),
-        row_height(sheet_id, comment_header, comment_header + 1, 32),
-        row_height(sheet_id, comment_header + 1, comment_header + 5, 30),
         row_height(sheet_id, plan_header, plan_header + 2, 32),
         row_height(sheet_id, plan_start, plan_start + 6, 26),
     ])
-    requests.append(repeat(sheet_id, 0, row_count, 0, 12,
+    requests.append(repeat(sheet_id, 0, row_count, 0, 13,
                            {"verticalAlignment": "MIDDLE"},
                            "userEnteredFormat.verticalAlignment"))
     if grid["rowCount"] > row_count:

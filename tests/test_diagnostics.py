@@ -8,8 +8,8 @@ class DiagnosticTests(unittest.TestCase):
     def test_thresholds(self):
         self.assertEqual(significance(0.099), "normal")
         self.assertEqual(significance(0.10), "attention")
-        self.assertEqual(significance(0.15), "attention")
-        self.assertEqual(significance(0.151), "diagnostic")
+        self.assertEqual(significance(0.20), "attention")
+        self.assertEqual(significance(0.201), "diagnostic")
 
     def test_preliminary_quality(self):
         current = Metrics(spend=110, clicks=10, leads=5, unprocessed_leads=1)
@@ -36,8 +36,8 @@ class DiagnosticTests(unittest.TestCase):
             "network:context": Metrics(clicks=100, leads=10),
         }
         current = {
-            "account": Metrics(clicks=1100, leads=91),
-            "network:search": Metrics(clicks=1000, leads=85),
+            "account": Metrics(clicks=1100, leads=81),
+            "network:search": Metrics(clicks=1000, leads=75),
             "network:context": Metrics(clicks=100, leads=6),
         }
         result = analyze(
@@ -45,6 +45,17 @@ class DiagnosticTests(unittest.TestCase):
             {"network:search": "Поиск", "network:context": "РСЯ"}, {},
         )
         self.assertIn("Наибольший вклад внёс Поиск", result["human_comment"])
+
+    def test_relevant_operational_changes_are_cautious_hypotheses(self):
+        previous = Metrics(spend=1000, clicks=100, leads=10)
+        current = Metrics(spend=900, clicks=100, leads=12)
+        result = analyze(current, previous, 0.2, operational_changes=[{
+            "change": "Отключила неэффективные ключевые фразы и расширила список минус-слов"
+        }])
+        comment = result["human_comment"]
+        self.assertIn("могли повлиять", comment)
+        self.assertIn("требуется дополнительная статистика", comment)
+        self.assertNotIn("из-за отключения", comment)
 
 
 if __name__ == "__main__":

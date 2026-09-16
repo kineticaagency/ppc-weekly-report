@@ -66,5 +66,9 @@
   },
   "quality": {
     "preliminary_unprocessed_share": 0.2
+  },
+  "changes_source": {
+    "spreadsheet_id": "1v5Cl4Ck_2sq2BeV5f7cGeYR5hqXaos7JNaXIf5_pVXE",
+    "lookback_days": 3
   }
 }

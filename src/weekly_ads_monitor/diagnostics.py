@@ -17,7 +17,7 @@ def significance(change: float | None) -> str:
     magnitude = abs(change)
     if magnitude < 0.10:
         return "normal"
-    if magnitude <= 0.15:
+    if magnitude <= 0.20:
         return "attention"
     return "diagnostic"
 
@@ -105,6 +105,7 @@ def _human_comment(
     current: Metrics, previous: Metrics, changes: dict[str, float | None], preliminary: bool,
     current_rows: dict[str, Metrics] | None = None, previous_rows: dict[str, Metrics] | None = None,
     labels: dict[str, str] | None = None, campaign_networks: dict[str, str] | None = None,
+    operational_changes: list[dict[str, str]] | None = None,
 ) -> str:
     cpa, leads = changes["cpa"], changes["leads"]
     cpc, cr, spend = changes["cpc"], changes["cr"], changes["spend"]
@@ -171,13 +172,16 @@ def _human_comment(
         sentences.append(quality + ".")
 
     needs_traffic_detail = any(
-        changes[key] is not None and abs(changes[key]) > 0.15 for key in ("cpa", "cr", "leads")
+        changes[key] is not None and abs(changes[key]) > 0.20 for key in ("cpa", "cr", "leads")
     )
     if needs_traffic_detail and current_rows and previous_rows:
         use_cr = cr is not None and abs(cr) > 0.15
         detail = _traffic_detail(current_rows, previous_rows, labels or {}, campaign_networks or {}, use_cr)
         if detail:
             sentences.append(detail)
+    change_context = _changes_context(operational_changes or [], changes)
+    if change_context:
+        sentences.append(change_context)
     if preliminary:
         share = current.derived()["unprocessed_share"] or 0
         sentences.append(
@@ -186,10 +190,49 @@ def _human_comment(
     return " ".join(sentences)
 
 
+def _changes_context(items: list[dict[str, str]], changes: dict[str, float | None]) -> str | None:
+    if not items or not any(
+        changes.get(key) is not None and abs(changes[key]) >= 0.10
+        for key in ("cpa", "cr", "cpc", "leads")
+    ):
+        return None
+    phrases: list[str] = []
+    text = " ".join(item.get("change", "") for item in items).casefold()
+    patterns = [
+        (("минус-слов", "минус слов"), "расширяли минус-слова"),
+        (("ключев",), "отключали или корректировали ключевые фразы"),
+        (("регион",), "корректировали географию показов"),
+        (("заголов", "текст объяв"), "обновляли элементы объявлений"),
+        (("семантик",), "расширяли семантику"),
+        (("площад",), "чистили площадки"),
+        (("бюдж",), "перераспределяли бюджеты"),
+        (("стратег",), "меняли настройки стратегий"),
+    ]
+    for needles, phrase in patterns:
+        if any(needle in text for needle in needles) and phrase not in phrases:
+            phrases.append(phrase)
+    if not phrases:
+        return None
+    summary = ", ".join(phrases[:2])
+    if len(phrases) > 2:
+        summary += " и вносили другие точечные корректировки"
+    if changes.get("cr") is not None and abs(changes["cr"]) >= 0.10:
+        effect = "состав трафика и динамику CR"
+    elif changes.get("cpc") is not None and abs(changes["cpc"]) >= 0.10:
+        effect = "динамику CPC и CPA"
+    else:
+        effect = "объём заявок и CPA"
+    return (
+        f"В течение недели {summary}; эти изменения могли повлиять на {effect}, "
+        "но для подтверждения эффекта требуется дополнительная статистика."
+    )
+
+
 def analyze(
     current: Metrics, previous: Metrics, preliminary_threshold: float,
     current_rows: dict[str, Metrics] | None = None, previous_rows: dict[str, Metrics] | None = None,
     labels: dict[str, str] | None = None, campaign_networks: dict[str, str] | None = None,
+    operational_changes: list[dict[str, str]] | None = None,
 ) -> dict:
     current_all = {**asdict(current), **current.derived()}
     previous_all = {**asdict(previous), **previous.derived()}
@@ -233,6 +276,8 @@ def analyze(
         "notices": notices,
         "quality_preliminary": preliminary,
         "human_comment": _human_comment(
-            current, previous, changes, preliminary, current_rows, previous_rows, labels, campaign_networks
+            current, previous, changes, preliminary, current_rows, previous_rows, labels, campaign_networks,
+            operational_changes,
         ),
+        "operational_changes": operational_changes or [],
     }
