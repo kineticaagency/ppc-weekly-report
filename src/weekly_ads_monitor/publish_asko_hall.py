@@ -29,7 +29,7 @@ MONTHS = {1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрел�
 MONTHS_GENITIVE = {1: "января", 2: "февраля", 3: "марта", 4: "апреля", 5: "мая", 6: "июня",
                    7: "июля", 8: "августа", 9: "сентября", 10: "октября",
                    11: "ноября", 12: "декабря"}
-HEADERS = ["Период", "Расход", "Показы", "CTR", "Клики", "CPC", "Обращения", "CR", "CPA", "Комментарий"]
+HEADERS = ["Период", "Расход", "Показы", "CTR", "Клики", "CPC", "Конверсии", "CR", "CPA", "Комментарий"]
 
 
 def _empty() -> dict:
@@ -75,12 +75,12 @@ def _comment(current: dict, previous: dict, operational_changes: list[dict[str, 
     elif abs(cpa) < .10:
         first = f"CPA изменился на {_fmt_pct(cpa)} и остался в пределах нормальной динамики"
         if leads is not None and abs(leads) >= .10:
-            first += f", количество обращений {'выросло' if leads > 0 else 'сократилось'} на {_fmt_pct(leads)}"
+            first += f", количество конверсий {'выросло' if leads > 0 else 'сократилось'} на {_fmt_pct(leads)}"
         first += "."
     else:
         first = f"CPA {'вырос' if cpa > 0 else 'снизился'} на {_fmt_pct(cpa)}"
         if leads is not None:
-            first += f", количество обращений {'увеличилось' if leads > 0 else 'сократилось'} на {_fmt_pct(leads)}"
+            first += f", количество конверсий {'увеличилось' if leads > 0 else 'сократилось'} на {_fmt_pct(leads)}"
         first += "."
     factors = [("CR", cr, -1), ("CPC", cpc, 1)]
     useful = [(name, value, effect) for name, value, effect in factors if value is not None and abs(value) >= .10]
@@ -221,7 +221,7 @@ def _write_sheet(client: GoogleSheetsClient, spreadsheet_id: str, tab: str, conf
     progress = as_of.day / calendar.monthrange(as_of.year, as_of.month)[1]
     plan_date = {"spend": plan["spend"] * progress, "clicks": plan["clicks"] * progress,
                  "leads": plan["leads"] * progress, "cpc": plan["cpc"], "cr": plan["cr"], "cpa": plan["cpa"]}
-    plan_items = [("Расход", "spend"), ("Клики", "clicks"), ("Обращения", "leads"),
+    plan_items = [("Расход", "spend"), ("Клики", "clicks"), ("Конверсии", "leads"),
                   ("CPC", "cpc"), ("CR", "cr"), ("CPA", "cpa")]
     plan_start = len(rows)
     for label, key in plan_items:
