@@ -14,6 +14,9 @@ from .publish_google_sheet import BLUE, GREEN, LIGHT_BLUE, RED, WHITE, YELLOW, d
 
 MONTHS = {1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель", 5: "Май", 6: "Июнь",
           7: "Июль", 8: "Август", 9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь"}
+MONTHS_GENITIVE = {1: "января", 2: "февраля", 3: "марта", 4: "апреля", 5: "мая", 6: "июня",
+                   7: "июля", 8: "августа", 9: "сентября", 10: "октября",
+                   11: "ноября", 12: "декабря"}
 
 
 def metric(values: dict) -> Metrics:
@@ -159,7 +162,7 @@ def main() -> None:
                  [payload["diagnostics"]["human_comment"]], [], [], []])
     as_of = datetime.fromisoformat(payload["as_of"])
     plan_header = len(rows)
-    rows.extend([[f"План/факт {MONTHS[as_of.month].lower()} на {as_of:%d.%m.%Y}"],
+    rows.extend([[f"План/факт {MONTHS_GENITIVE[as_of.month]} на {as_of:%d.%m.%Y}"],
                  ["Показатель", "План месяца", "План на дату", "Факт", "Отклонение"]])
     plan_items = [("Расход", "spend"), ("Клики", "clicks"), ("Заявки", "leads"),
                   ("CPC", "cpc"), ("CR", "cr"), ("CPA", "cpa")]

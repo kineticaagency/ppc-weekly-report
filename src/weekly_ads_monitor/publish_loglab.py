@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import calendar
 import json
 import urllib.parse
 import urllib.request
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from .env import load_env
@@ -54,19 +55,21 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="config/loglab.json")
     parser.add_argument("--credentials", default=".secrets/google-service-account.json")
+    parser.add_argument("--as-of", type=date.fromisoformat,
+                        default=date.today() - timedelta(days=date.today().weekday() + 1))
     args = parser.parse_args()
     config = json.loads(Path(args.config).read_text(encoding="utf-8"))
     secrets = load_env(Path(".env.local"))
-    segments = [
-        Period(date(2026, 8, 1), date(2026, 8, 2)),
-        Period(date(2026, 8, 3), date(2026, 8, 9)),
-        Period(date(2026, 8, 10), date(2026, 8, 16)),
-        Period(date(2026, 8, 17), date(2026, 8, 23)),
-        Period(date(2026, 8, 24), date(2026, 8, 30)),
-        Period(date(2026, 8, 31), date(2026, 8, 31)),
-        Period(date(2026, 9, 1), date(2026, 9, 6)),
-    ]
-    whole = Period(date(2026, 8, 1), date(2026, 9, 6))
+    history_start, history_end = date(2026, 8, 1), args.as_of
+    segments = []
+    cursor = history_start
+    while cursor <= history_end:
+        sunday = cursor + timedelta(days=6 - cursor.weekday())
+        month_end = cursor.replace(day=calendar.monthrange(cursor.year, cursor.month)[1])
+        end = min(sunday, month_end, history_end)
+        segments.append(Period(cursor, end))
+        cursor = end + timedelta(days=1)
+    whole = Period(history_start, history_end)
     yd = config["yandex_direct"]
     direct_rows = YandexDirectClient(
         secrets["YANDEX_DIRECT_OAUTH_TOKEN"], yd["client_login"],
@@ -84,18 +87,21 @@ def main() -> None:
     for day, count in visits.items():
         daily[day]["leads"] += count
     values = [(period, _period_raw(daily, period)) for period in segments]
-    previous = values[4][1]
-    latest = _sum([values[5][1], values[6][1]])
-    month_facts = {
-        8: _period_raw(daily, Period(date(2026, 8, 1), date(2026, 8, 31))),
-        9: _period_raw(daily, Period(date(2026, 9, 1), date(2026, 9, 6))),
-    }
-    plan = _fetch_plan(config["plan"]["csv_url"], date(2026, 9, 1))
-    fact = values[6][1]
+    latest_period = Period(history_end - timedelta(days=6), history_end)
+    previous_period = Period(history_end - timedelta(days=13), history_end - timedelta(days=7))
+    latest = _period_raw(daily, latest_period)
+    previous = _period_raw(daily, previous_period)
+    month_facts = {}
+    for month in range(history_start.month, history_end.month + 1):
+        end = min(date(history_end.year, month, calendar.monthrange(history_end.year, month)[1]),
+                  history_end)
+        month_facts[month] = _period_raw(daily, Period(date(history_end.year, month, 1), end))
+    plan = _fetch_plan(config["plan"]["csv_url"], history_end.replace(day=1))
+    fact = month_facts[history_end.month]
     client = GoogleSheetsClient(Path(args.credentials))
     sheet_id = _write_sheet(
         client, config["google_sheets"]["spreadsheet_id"], config["google_sheets"]["tab_name"],
-        config, values, latest, previous, month_facts, plan, fact, date(2026, 9, 6),
+        config, values, latest, previous, month_facts, plan, fact, history_end,
     )
     print(f"https://docs.google.com/spreadsheets/d/{config['google_sheets']['spreadsheet_id']}/edit#gid={sheet_id}")
 

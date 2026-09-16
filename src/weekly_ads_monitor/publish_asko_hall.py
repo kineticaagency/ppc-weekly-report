@@ -24,6 +24,9 @@ from .yandex_direct import YandexDirectClient
 
 MONTHS = {1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель", 5: "Май", 6: "Июнь",
           7: "Июль", 8: "Август", 9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь"}
+MONTHS_GENITIVE = {1: "января", 2: "февраля", 3: "марта", 4: "апреля", 5: "мая", 6: "июня",
+                   7: "июля", 8: "августа", 9: "сентября", 10: "октября",
+                   11: "ноября", 12: "декабря"}
 HEADERS = ["Период", "Расход", "Показы", "CTR", "Клики", "CPC", "Обращения", "CR", "CPA"]
 
 
@@ -199,13 +202,13 @@ def _write_sheet(client: GoogleSheetsClient, spreadsheet_id: str, tab: str, conf
         sections.append((title, title + 1, fact_row))
 
     comment_header = len(rows)
-    latest_period = Period(date(2026, 8, 31), date(2026, 9, 6))
+    latest_period = Period(as_of - timedelta(days=6), as_of)
     rows.extend([[f"Комментарий за {display_period(latest_period.label)}"],
                  [_comment(latest, previous, config.get("conversion_note", ""))], [], []])
     plan_header = len(rows)
-    rows.extend([[f"План/факт сентября на {as_of:%d.%m.%Y}"],
+    rows.extend([[f"План/факт {MONTHS_GENITIVE[as_of.month]} на {as_of:%d.%m.%Y}"],
                  ["Показатель", "План месяца", "План на дату", "Факт", "Отклонение"]])
-    progress = as_of.day / 30
+    progress = as_of.day / calendar.monthrange(as_of.year, as_of.month)[1]
     plan_date = {"spend": plan["spend"] * progress, "clicks": plan["clicks"] * progress,
                  "leads": plan["leads"] * progress, "cpc": plan["cpc"], "cr": plan["cr"], "cpa": plan["cpa"]}
     plan_items = [("Расход", "spend"), ("Клики", "clicks"), ("Обращения", "leads"),
@@ -308,10 +311,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="config/asko-hall.json")
     parser.add_argument("--credentials", default=".secrets/google-service-account.json")
+    parser.add_argument("--as-of", type=date.fromisoformat,
+                        default=date.today() - timedelta(days=date.today().weekday() + 1))
     args = parser.parse_args()
     config = json.loads(Path(args.config).read_text(encoding="utf-8"))
     secrets = load_env(Path(".env.local"))
-    history_start, history_end = date(2026, 1, 1), date(2026, 9, 6)
+    history_start, history_end = date(2026, 1, 1), args.as_of
     segments = []
     cursor = history_start
     while cursor <= history_end:
@@ -330,10 +335,10 @@ def main() -> None:
         daily[day]["impressions"] += int(row["Impressions"])
         daily[day]["clicks"] += int(row["Clicks"])
     metrika = {}
-    for month in range(1, 10):
-        month_start = date(2026, month, 1)
+    for month in range(1, history_end.month + 1):
+        month_start = date(history_end.year, month, 1)
         month_finish = min(
-            date(2026, month, calendar.monthrange(2026, month)[1]), history_end
+            date(history_end.year, month, calendar.monthrange(history_end.year, month)[1]), history_end
         )
         metrika.update(_fetch_metrika(
             secrets["YANDEX_METRIKA_OAUTH_TOKEN"], config, month_start, month_finish
@@ -354,26 +359,26 @@ def main() -> None:
             raw["leads"] = None
         raw = _derived({key: raw[key] for key in _empty()})
         values.append((period, raw))
-    previous_period = Period(date(2026, 8, 24), date(2026, 8, 30))
+    latest_period = Period(history_end - timedelta(days=6), history_end)
+    previous_period = Period(history_end - timedelta(days=13), history_end - timedelta(days=7))
     previous = _period_raw(daily, previous_period)
     previous["leads"] += _fetch_unique_calls(
         secrets["ROISTAT_API_KEY"], ro["project_id"], ro["source_marker"], previous_period
     )
     previous = _derived({key: previous[key] for key in _empty()})
-    latest = _sum([value for period, value in values
-                   if date(2026, 8, 31) <= period.start and period.end <= date(2026, 9, 6)])
-    full_latest = Period(date(2026, 8, 31), date(2026, 9, 6))
-    latest["leads"] = sum(metrika.get(day, 0) for day in daily if full_latest.start <= day <= full_latest.end)
+    latest = _period_raw(daily, latest_period)
+    latest["leads"] = sum(metrika.get(day, 0) for day in daily
+                          if latest_period.start <= day <= latest_period.end)
     latest["leads"] += _fetch_unique_calls(
-        secrets["ROISTAT_API_KEY"], ro["project_id"], ro["source_marker"], full_latest
+        secrets["ROISTAT_API_KEY"], ro["project_id"], ro["source_marker"], latest_period
     )
     latest = _derived({key: latest[key] for key in _empty()})
-    plan = _fetch_plan(config["plan"]["csv_url"], date(2026, 9, 1))
+    plan = _fetch_plan(config["plan"]["csv_url"], history_end.replace(day=1))
     month_facts = {}
-    for month in range(1, 10):
-        month_end = calendar.monthrange(2026, month)[1]
-        period = Period(date(2026, month, 1),
-                        min(date(2026, month, month_end), history_end))
+    for month in range(1, history_end.month + 1):
+        month_end = calendar.monthrange(history_end.year, month)[1]
+        period = Period(date(history_end.year, month, 1),
+                        min(date(history_end.year, month, month_end), history_end))
         month_fact = _period_raw(daily, period)
         try:
             month_fact["leads"] += _fetch_unique_calls(
@@ -384,11 +389,11 @@ def main() -> None:
                 raise
             month_fact["leads"] = None
         month_facts[month] = _derived({key: month_fact[key] for key in _empty()})
-    fact = month_facts[9]
+    fact = month_facts[history_end.month]
     client = GoogleSheetsClient(Path(args.credentials))
     sheet_id = _write_sheet(client, config["google_sheets"]["spreadsheet_id"],
         config["google_sheets"]["tab_name"], config, values, latest, previous, month_facts,
-        plan, fact, date(2026, 9, 6))
+        plan, fact, history_end)
     print(f"https://docs.google.com/spreadsheets/d/{config['google_sheets']['spreadsheet_id']}/edit#gid={sheet_id}")
 
 
