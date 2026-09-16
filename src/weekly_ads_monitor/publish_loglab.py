@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from .env import load_env
+from .changes import fetch_project_changes
 from .google_sheets import GoogleSheetsClient
 from .models import Period
 from .publish_asko_hall import _derived, _empty, _fetch_plan, _period_raw, _sum, _write_sheet
@@ -99,9 +100,15 @@ def main() -> None:
     plan = _fetch_plan(config["plan"]["csv_url"], history_end.replace(day=1))
     fact = month_facts[history_end.month]
     client = GoogleSheetsClient(Path(args.credentials))
+    source = config.get("changes_source")
+    operational_changes = fetch_project_changes(
+        client, source["spreadsheet_id"], config["project"], latest_period,
+        source.get("lookback_days", 3),
+    ) if source else []
     sheet_id = _write_sheet(
         client, config["google_sheets"]["spreadsheet_id"], config["google_sheets"]["tab_name"],
         config, values, latest, previous, month_facts, plan, fact, history_end,
+        operational_changes,
     )
     print(f"https://docs.google.com/spreadsheets/d/{config['google_sheets']['spreadsheet_id']}/edit#gid={sheet_id}")
 

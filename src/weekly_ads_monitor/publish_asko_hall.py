@@ -13,6 +13,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .env import load_env
+from .changes import fetch_project_changes
+from .diagnostics import _changes_context
 from .google_sheets import GoogleSheetsClient
 from .http import request_json
 from .models import Period
@@ -27,7 +29,7 @@ MONTHS = {1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрел�
 MONTHS_GENITIVE = {1: "января", 2: "февраля", 3: "марта", 4: "апреля", 5: "мая", 6: "июня",
                    7: "июля", 8: "августа", 9: "сентября", 10: "октября",
                    11: "ноября", 12: "декабря"}
-HEADERS = ["Период", "Расход", "Показы", "CTR", "Клики", "CPC", "Обращения", "CR", "CPA"]
+HEADERS = ["Период", "Расход", "Показы", "CTR", "Клики", "CPC", "Обращения", "CR", "CPA", "Комментарий"]
 
 
 def _empty() -> dict:
@@ -63,7 +65,7 @@ def _fmt_pct(value: float | None) -> str:
     return "н/д" if value is None else f"{abs(value):.1%}".replace(".", ",")
 
 
-def _comment(current: dict, previous: dict, conversion_note: str) -> str:
+def _comment(current: dict, previous: dict, operational_changes: list[dict[str, str]] | None = None) -> str:
     cpa = _change(current["cpa"], previous["cpa"])
     leads = _change(current["leads"], previous["leads"])
     cr = _change(current["cr"], previous["cr"])
@@ -89,8 +91,11 @@ def _comment(current: dict, previous: dict, conversion_note: str) -> str:
         sentences.append(
             f"Основной причиной стало {'снижение' if value < 0 else 'увеличение'} {name} на {_fmt_pct(value)}."
         )
-    if conversion_note:
-        sentences.append(conversion_note)
+    context = _changes_context(operational_changes or [], {
+        "cpa": cpa, "leads": leads, "cr": cr, "cpc": cpc,
+    })
+    if context:
+        sentences.append(context)
     return " ".join(sentences)
 
 
@@ -170,22 +175,30 @@ def _period_raw(daily: dict[date, dict], period: Period) -> dict:
 
 def _write_sheet(client: GoogleSheetsClient, spreadsheet_id: str, tab: str, config: dict,
                  periods: list[tuple[Period, dict]], latest: dict, previous: dict,
-                 month_facts: dict[int, dict], plan: dict, fact: dict, as_of: date) -> int:
+                 month_facts: dict[int, dict], plan: dict, fact: dict, as_of: date,
+                 operational_changes: list[dict[str, str]] | None = None) -> int:
     metadata = client.metadata(spreadsheet_id)
     existing = next((x["properties"] for x in metadata["sheets"] if x["properties"]["title"] == tab), None)
     if existing is None:
         reply = client.batch_update(spreadsheet_id, [{"addSheet": {"properties": {
-            "title": tab, "gridProperties": {"rowCount": 60, "columnCount": 9}}}}])
+            "title": tab, "gridProperties": {"rowCount": 60, "columnCount": 10}}}}])
         sheet_id = reply["replies"][0]["addSheet"]["properties"]["sheetId"]
         grid_rows = 60
     else:
         sheet_id = existing["sheetId"]
         grid_rows = existing["gridProperties"]["rowCount"]
+        if existing["gridProperties"].get("columnCount", 0) < 10:
+            client.batch_update(spreadsheet_id, [{"appendDimension": {
+                "sheetId": sheet_id, "dimension": "COLUMNS",
+                "length": 10 - existing["gridProperties"].get("columnCount", 0),
+            }}])
 
     updated_at = datetime.now(ZoneInfo(config["timezone"]))
     rows = [[f"{config['project']} — еженедельный мониторинг"],
             [f"Последнее обновление: {updated_at:%d.%m.%Y, %H:%M}"], []]
     sections = []
+    latest_period = Period(as_of - timedelta(days=6), as_of)
+    latest_comment = _comment(latest, previous, operational_changes)
     grouped: dict[int, list[tuple[Period, dict]]] = defaultdict(list)
     for period, values in periods:
         grouped[period.start.month].append((period, values))
@@ -193,18 +206,15 @@ def _write_sheet(client: GoogleSheetsClient, spreadsheet_id: str, tab: str, conf
         title = len(rows)
         rows.extend([[f"{MONTHS[month]} 2026"], HEADERS])
         for period, values in grouped[month]:
+            comment = latest_comment if period == latest_period else ""
             rows.append([display_period(period.label), values["spend"], values["impressions"], values["ctr"],
-                         values["clicks"], values["cpc"], values["leads"], values["cr"], values["cpa"]])
+                         values["clicks"], values["cpc"], values["leads"], values["cr"], values["cpa"], comment])
         monthly = month_facts[month]
         fact_row = len(rows)
         rows.extend([["Факт", monthly["spend"], monthly["impressions"], monthly["ctr"], monthly["clicks"],
-                      monthly["cpc"], monthly["leads"], monthly["cr"], monthly["cpa"]], []])
+                      monthly["cpc"], monthly["leads"], monthly["cr"], monthly["cpa"], ""], []])
         sections.append((title, title + 1, fact_row))
 
-    comment_header = len(rows)
-    latest_period = Period(as_of - timedelta(days=6), as_of)
-    rows.extend([[f"Комментарий за {display_period(latest_period.label)}"],
-                 [_comment(latest, previous, config.get("conversion_note", ""))], [], []])
     plan_header = len(rows)
     rows.extend([[f"План/факт {MONTHS_GENITIVE[as_of.month]} на {as_of:%d.%m.%Y}"],
                  ["Показатель", "План месяца", "План на дату", "Факт", "Отклонение"]])
@@ -224,24 +234,24 @@ def _write_sheet(client: GoogleSheetsClient, spreadsheet_id: str, tab: str, conf
             "sheetId": sheet_id, "dimension": "ROWS", "length": row_count - grid_rows}}])
         grid_rows = row_count
     padded = rows + [[] for _ in range(grid_rows - row_count)]
-    update_rows = [{"values": [value_cell(v) for v in row + [None] * (9 - len(row))]} for row in padded]
+    update_rows = [{"values": [value_cell(v) for v in row + [None] * (10 - len(row))]} for row in padded]
     def merge(row: int, height: int = 1):
         return {"mergeCells": {"range": {"sheetId": sheet_id, "startRowIndex": row,
-            "endRowIndex": row + height, "startColumnIndex": 0, "endColumnIndex": 9}, "mergeType": "MERGE_ALL"}}
+            "endRowIndex": row + height, "startColumnIndex": 0, "endColumnIndex": 10}, "mergeType": "MERGE_ALL"}}
     requests = [
         {"unmergeCells": {"range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": grid_rows,
-                                      "startColumnIndex": 0, "endColumnIndex": 9}}},
+                                      "startColumnIndex": 0, "endColumnIndex": 10}}},
         {"updateCells": {"range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": grid_rows,
-                                     "startColumnIndex": 0, "endColumnIndex": 9}, "rows": update_rows,
+                                     "startColumnIndex": 0, "endColumnIndex": 10}, "rows": update_rows,
                          "fields": "userEnteredValue"}},
-        repeat(sheet_id, 0, grid_rows, 0, 9, {}, "userEnteredFormat"),
+        repeat(sheet_id, 0, grid_rows, 0, 10, {}, "userEnteredFormat"),
         merge(0), merge(1),
-        repeat(sheet_id, 0, row_count, 0, 9, {"textFormat": {"fontFamily": "Montserrat", "fontSize": 10},
+        repeat(sheet_id, 0, row_count, 0, 10, {"textFormat": {"fontFamily": "Montserrat", "fontSize": 10},
                "verticalAlignment": "MIDDLE"}, "userEnteredFormat.textFormat,userEnteredFormat.verticalAlignment"),
-        repeat(sheet_id, 0, 1, 0, 9, {"backgroundColor": BLUE, "horizontalAlignment": "CENTER",
+        repeat(sheet_id, 0, 1, 0, 10, {"backgroundColor": BLUE, "horizontalAlignment": "CENTER",
                "textFormat": {"bold": True, "foregroundColor": WHITE, "fontFamily": "Montserrat", "fontSize": 14}},
                "userEnteredFormat"),
-        repeat(sheet_id, 1, 2, 0, 9, {"horizontalAlignment": "LEFT", "textFormat": {
+        repeat(sheet_id, 1, 2, 0, 10, {"horizontalAlignment": "LEFT", "textFormat": {
             "foregroundColor": {"red": .25, "green": .25, "blue": .25}, "fontFamily": "Montserrat", "fontSize": 9}},
             "userEnteredFormat"),
         {"updateSheetProperties": {"properties": {"sheetId": sheet_id, "gridProperties": {"frozenRowCount": 0}},
@@ -250,29 +260,25 @@ def _write_sheet(client: GoogleSheetsClient, spreadsheet_id: str, tab: str, conf
     formats = {1: '#,##0 "₽"', 2: "#,##0", 3: "0.0%", 4: "#,##0", 5: '#,##0 "₽"',
                6: "#,##0", 7: "0.0%", 8: '#,##0 "₽"'}
     for title, header, fact_row in sections:
-        requests.extend([merge(title), repeat(sheet_id, title, title + 1, 0, 9,
+        requests.extend([merge(title), repeat(sheet_id, title, title + 1, 0, 10,
             {"backgroundColor": BLUE, "horizontalAlignment": "CENTER", "textFormat": {"bold": True,
              "foregroundColor": WHITE, "fontFamily": "Montserrat"}}, "userEnteredFormat"),
-            repeat(sheet_id, header, header + 1, 0, 9, {"backgroundColor": LIGHT_BLUE,
+            repeat(sheet_id, header, header + 1, 0, 10, {"backgroundColor": LIGHT_BLUE,
             "horizontalAlignment": "CENTER", "wrapStrategy": "WRAP", "textFormat": {"bold": True,
             "fontFamily": "Montserrat"}}, "userEnteredFormat"),
-            repeat(sheet_id, fact_row, fact_row + 1, 0, 9, {"backgroundColor": LIGHT_BLUE,
+            repeat(sheet_id, fact_row, fact_row + 1, 0, 10, {"backgroundColor": LIGHT_BLUE,
             "textFormat": {"bold": True, "fontFamily": "Montserrat"}},
             "userEnteredFormat.backgroundColor,userEnteredFormat.textFormat"),
             repeat(sheet_id, header + 1, fact_row + 1, 1, 9, {"horizontalAlignment": "CENTER"},
                    "userEnteredFormat.horizontalAlignment"), row_height(sheet_id, title, header + 1, 32),
-            row_height(sheet_id, header + 1, fact_row + 1, 26)])
+            row_height(sheet_id, header + 1, fact_row + 1, 72),
+            repeat(sheet_id, header + 1, fact_row, 9, 10, {"wrapStrategy": "WRAP", "horizontalAlignment": "LEFT"},
+                   "userEnteredFormat.wrapStrategy,userEnteredFormat.horizontalAlignment")])
         for col, pattern in formats.items():
             requests.append(repeat(sheet_id, header + 1, fact_row + 1, col, col + 1,
                 {"numberFormat": {"type": "NUMBER", "pattern": pattern}}, "userEnteredFormat.numberFormat"))
-    requests.extend([merge(comment_header), merge(comment_header + 1, 3),
-        repeat(sheet_id, comment_header, comment_header + 1, 0, 9, {"backgroundColor": BLUE,
-        "horizontalAlignment": "CENTER", "textFormat": {"bold": True, "foregroundColor": WHITE,
-        "fontFamily": "Montserrat"}}, "userEnteredFormat"),
-        repeat(sheet_id, comment_header + 1, comment_header + 4, 0, 9, {"backgroundColor": YELLOW,
-        "wrapStrategy": "WRAP", "verticalAlignment": "MIDDLE", "textFormat": {"fontFamily": "Montserrat"}},
-        "userEnteredFormat"), merge(plan_header),
-        repeat(sheet_id, plan_header, plan_header + 1, 0, 9, {"backgroundColor": BLUE,
+    requests.extend([merge(plan_header),
+        repeat(sheet_id, plan_header, plan_header + 1, 0, 10, {"backgroundColor": BLUE,
         "horizontalAlignment": "CENTER", "textFormat": {"bold": True, "foregroundColor": WHITE,
         "fontFamily": "Montserrat"}}, "userEnteredFormat"),
         repeat(sheet_id, plan_header + 1, plan_header + 2, 0, 5, {"backgroundColor": LIGHT_BLUE,
@@ -294,11 +300,11 @@ def _write_sheet(client: GoogleSheetsClient, spreadsheet_id: str, tab: str, conf
         "startIndex": 0, "endIndex": 1}, "properties": {"pixelSize": 145}, "fields": "pixelSize"}},
         {"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "COLUMNS",
         "startIndex": 1, "endIndex": 9}, "properties": {"pixelSize": 105}, "fields": "pixelSize"}},
+        {"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "COLUMNS",
+        "startIndex": 9, "endIndex": 10}, "properties": {"pixelSize": 460}, "fields": "pixelSize"}},
         row_height(sheet_id, 0, 1, 38), row_height(sheet_id, 1, 2, 26),
-        row_height(sheet_id, comment_header, comment_header + 1, 32),
-        row_height(sheet_id, comment_header + 1, comment_header + 4, 30),
         row_height(sheet_id, plan_header, plan_header + 2, 32), row_height(sheet_id, plan_start, plan_start + 6, 26),
-        repeat(sheet_id, 0, row_count, 0, 9, {"verticalAlignment": "MIDDLE"},
+        repeat(sheet_id, 0, row_count, 0, 10, {"verticalAlignment": "MIDDLE"},
                "userEnteredFormat.verticalAlignment")])
     if grid_rows > row_count:
         requests.append({"deleteDimension": {"range": {"sheetId": sheet_id, "dimension": "ROWS",
@@ -391,9 +397,14 @@ def main() -> None:
         month_facts[month] = _derived({key: month_fact[key] for key in _empty()})
     fact = month_facts[history_end.month]
     client = GoogleSheetsClient(Path(args.credentials))
+    source = config.get("changes_source")
+    operational_changes = fetch_project_changes(
+        client, source["spreadsheet_id"], config["project"], latest_period,
+        source.get("lookback_days", 3),
+    ) if source else []
     sheet_id = _write_sheet(client, config["google_sheets"]["spreadsheet_id"],
         config["google_sheets"]["tab_name"], config, values, latest, previous, month_facts,
-        plan, fact, history_end)
+        plan, fact, history_end, operational_changes)
     print(f"https://docs.google.com/spreadsheets/d/{config['google_sheets']['spreadsheet_id']}/edit#gid={sheet_id}")
 
 
